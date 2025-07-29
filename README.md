@@ -1,3 +1,7 @@
+
+<img width="1173" height="875" alt="Screenshot 2025-07-29 at 2 38 51 PM" src="https://github.com/user-attachments/assets/bd9a54b7-b8b8-470a-b8d3-f17465421ce5" />
+<img width="1459" height="794" alt="Screenshot 2025-07-29 at 2 39 10 PM" src="https://github.com/user-attachments/assets/e1448eb9-d3c3-429c-8071-0cd3dc01bbaa" />
+
 # Automated Church Presentation Slides
 
 This Google Apps Script creates weekly church slides by pulling data from Google Sheets and web sources so you don’t have to copy-paste each week.
