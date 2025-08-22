@@ -834,21 +834,17 @@ function extractHymnVerses(html) {
  */
 function searchGmailForPraiseLyrics() {
   try {
-    // Calculate date 10 days ago
+    // Calculate date 6 days ago
     const tenDaysAgo = new Date();
-    tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
+    tenDaysAgo.setDate(tenDaysAgo.getDate() - 6);
     const dateString = Utilities.formatDate(tenDaysAgo, Session.getScriptTimeZone(), 'yyyy/MM/dd');
     
-    // Search for emails with (praise AND lyrics) OR (worship AND lyrics) in subject within past 10 days
+    // Search for emails with (praise AND lyrics) OR (worship AND lyrics) in subject within past 6 days
     const searchQuery = `after:${dateString} (subject:(praise lyrics) OR subject:(worship lyrics))`;
     
-    Logger.log('Search query: ' + searchQuery);
-    
-    const threads = GmailApp.search(searchQuery, 0, 10);
-    Logger.log('Found ' + threads.length + ' matching emails');
+    const threads = GmailApp.search(searchQuery, 0, 6);
     
     if (threads.length === 0) {
-      Logger.log('No emails found matching the criteria');
       return null;
     }
     
@@ -856,10 +852,7 @@ function searchGmailForPraiseLyrics() {
     const mostRecentThread = threads[0];
     const message = mostRecentThread.getMessages()[0];
     
-    Logger.log('Processing email with subject: ' + message.getSubject());
-    Logger.log('Email date: ' + message.getDate());
-    
-    // Try HTML version first to preserve formatting
+    // Try HTML version first since it's more likely to preserve formatting
     let emailBody = message.getBody();
     let isHtml = true;
     
@@ -867,21 +860,18 @@ function searchGmailForPraiseLyrics() {
     if (!emailBody || emailBody.trim() === '') {
       emailBody = message.getPlainBody();
       isHtml = false;
-      Logger.log('Using plain text version');
-    } else {
-      Logger.log('Using HTML version');
     }
     
-    Logger.log('Raw email body length: ' + emailBody.length);
-    
     if (isHtml) {
-      // Better HTML to text conversion - preserve paragraph breaks AND line breaks within paragraphs
-      emailBody = emailBody.replace(/<div[^>]*>/gi, '')
-                          .replace(/<\/div>/gi, '\n\n')
-                          .replace(/<p[^>]*>/gi, '')
-                          .replace(/<\/p>/gi, '\n\n')
-                          .replace(/<br\s*\/?>/gi, '\n')
-                          .replace(/<[^>]*>/g, ''); // Remove all other HTML tags
+      // Preserve the structure better by being more careful with HTML conversion
+      // Look for div and p tags that indicate paragraph breaks
+      emailBody = emailBody.replace(/<\/div>\s*<div[^>]*>/gi, '\n\n')  // Div to div = paragraph break
+                          .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')        // P to p = paragraph break
+                          .replace(/<br\s*\/?>\s*<br\s*\/?>/gi, '\n\n') // Double br = paragraph break
+                          .replace(/<br\s*\/?>/gi, '\n')               // Single br = line break
+                          .replace(/<\/?(div|p)[^>]*>/gi, '\n')        // Remove remaining div/p tags
+                          .replace(/<\/?(strong|b|em|i|u)[^>]*>/gi, '') // Remove formatting tags
+                          .replace(/<[^>]*>/g, '');                    // Remove all other HTML tags
       
       // Clean up HTML entities
       emailBody = emailBody.replace(/&nbsp;/g, ' ')
@@ -894,97 +884,99 @@ function searchGmailForPraiseLyrics() {
     }
     
     // Remove markdown formatting
-    emailBody = emailBody.replace(/^\*\*(.*?)\*\*$/gm, '$1') // Remove **bold** formatting from lines
-                        .replace(/^\*(.*?)\*$/gm, '$1');     // Remove *italic* formatting from lines
+    emailBody = emailBody.replace(/^\*\*(.*?)\*\*$/gm, '$1') // Remove **bold** formatting
+                        .replace(/^\*(.*?)\*$/gm, '$1');     // Remove *italic* formatting
     
-    // If we still don't have proper line breaks, try a different approach
-    if (!emailBody.includes('\n\n')) {
-      Logger.log('No double line breaks found, trying alternative parsing');
-      
-      // If the content appears to be on one line, try to intelligently split it
-      // Look for patterns that indicate new verses/paragraphs
-      emailBody = emailBody.replace(/(\s)(Just the time)/g, '\n\n$2')
-                          .replace(/(\s)(Oh, I want to know You more)/g, '\n\n$2')
-                          .replace(/(\s)(And when my daily)/g, '\n\n$2')
-                          .replace(/(\s)(And I would give)/g, '\n\n$2')
-                          .replace(/(\s)(To know You in)/g, '\n$2'); // This should stay with previous line
-      
-      // Also add line breaks within paragraphs for better readability
-      emailBody = emailBody.replace(/(self)(\s+)(Just the time)/g, '$1\n$3')
-                          .replace(/(wealth)(\s+)(That's when)/g, '$1\n$3')
-                          .replace(/(call)(\s+)(And all my)/g, '$1\n$3')
-                          .replace(/(you)(\s+)(Oh, I want to know You,)/g, '$1\n$3')
-                          .replace(/(mind)(\s+)(Looking in)/g, '$1\n$3')
-                          .replace(/(me)(\s+)(Cries that say)/g, '$1\n$3')
-                          .replace(/(song)(\s+)(My heart begins)/g, '$1\n$3')
-                          .replace(/(gone)(\s+)(I've run)/g, '$1\n$3')
-                          .replace(/(soul)(\s+)(Now, the gentle)/g, '$1\n$3')
-                          .replace(/(You)(\s+)(Oh, I want to know You to)/g, '$1\n$3')
-                          .replace(/(mind)(\s+)(Looking in Your eyes)/g, '$1\n$3')
-                          .replace(/(me)(\s+)(Cries that say I want)/g, '$1\n$3')
-                          .replace(/(breath)(\s+)(To know You)/g, '$1\n$3')
-                          .replace(/(resurrection)(\s+)(Oh, I want)/g, '$1\n$3')
-                          .replace(/(more)(\s+)(Oh, I want to know You,)/g, '$1\n$3');
-    }
-    
-    Logger.log('After processing: "' + emailBody.substring(0, 400) + '"');
+    // Clean up whitespace while preserving structure
+    emailBody = emailBody.replace(/[ \t]+/g, ' ')           // Multiple spaces to single
+                        .replace(/\n[ \t]+/g, '\n')         // Remove spaces at start of lines
+                        .replace(/[ \t]+\n/g, '\n')         // Remove spaces at end of lines
+                        .replace(/\n{3,}/g, '\n\n')         // Limit to double line breaks
+                        .trim();
     
     // Split by double line breaks to get paragraphs
     let sections = emailBody.split(/\n\s*\n/)
                            .map(section => section.trim())
                            .filter(section => section !== '');
     
-    Logger.log('Found ' + sections.length + ' sections after splitting:');
-    sections.forEach((section, index) => {
-      Logger.log(`Section ${index + 1}: "${section.substring(0, 100)}..."`);
-    });
-    
-    if (sections.length === 0) {
-      Logger.log('No content found in email');
-      return null;
+    // If we still don't have proper paragraph separation, use a more robust approach
+    if (sections.length <= 1) {
+      // Split by single line breaks and analyze the structure
+      let lines = emailBody.split(/\n/)
+                          .map(line => line.trim())
+                          .filter(line => line !== '');
+      
+      if (lines.length === 0) {
+        return null;
+      }
+      
+      // First line is the title
+      const songTitle = lines[0];
+      const remainingLines = lines.slice(1);
+      
+      // Group lines into paragraphs by looking for empty lines or logical breaks
+      const lyricsParagraphs = [];
+      let currentParagraph = [];
+      let emptyLinesSeen = 0;
+      
+      for (let i = 0; i < remainingLines.length; i++) {
+        const line = remainingLines[i];
+        
+        // If line is empty or just whitespace, increment counter
+        if (line.trim() === '') {
+          emptyLinesSeen++;
+          continue;
+        }
+        
+        // If we've seen empty lines, start a new paragraph
+        if (emptyLinesSeen > 0 && currentParagraph.length > 0) {
+          lyricsParagraphs.push(currentParagraph.join('\n'));
+          currentParagraph = [];
+        }
+        
+        emptyLinesSeen = 0;
+        currentParagraph.push(line);
+      }
+      
+      // Add the last paragraph if it exists
+      if (currentParagraph.length > 0) {
+        lyricsParagraphs.push(currentParagraph.join('\n'));
+      }
+      
+      // If we still have everything in one paragraph, try to split it more intelligently
+      if (lyricsParagraphs.length === 1) {
+        const allText = lyricsParagraphs[0];
+        const allLines = allText.split('\n');
+        
+        // Split into chunks of 4-6 lines each
+        const newParagraphs = [];
+        for (let i = 0; i < allLines.length; i += 4) {
+          const chunk = allLines.slice(i, i + 6); // Take up to 6 lines
+          if (chunk.length > 0) {
+            newParagraphs.push(chunk.join('\n'));
+          }
+        }
+        
+        return {
+          title: songTitle,
+          lyrics: newParagraphs,
+          subject: message.getSubject(),
+          date: message.getDate()
+        };
+      }
+      
+      return {
+        title: songTitle,
+        lyrics: lyricsParagraphs,
+        subject: message.getSubject(),
+        date: message.getDate()
+      };
     }
     
-    // First section should be just the title
-    let songTitle, lyricsParagraphs;
+    // We have clear paragraph breaks from the original email
+    const songTitle = sections[0];
+    const lyricsParagraphs = sections.slice(1);
     
-    if (sections.length === 1) {
-      // Everything is in one section, need to extract title manually
-      const fullContent = sections[0];
-      // Title is likely the first few words
-      const words = fullContent.split(' ');
-      songTitle = words.slice(0, 7).join(' '); // "Oh, I want to know You more"
-      
-      // Rest is lyrics - split into logical paragraphs
-      const remainingContent = words.slice(7).join(' ');
-      lyricsParagraphs = [
-        remainingContent.substring(0, remainingContent.indexOf('Oh, I want to know You more')),
-        remainingContent.substring(remainingContent.indexOf('Oh, I want to know You more'), remainingContent.indexOf('And when my daily')),
-        remainingContent.substring(remainingContent.indexOf('And when my daily'), remainingContent.indexOf('Oh, I want to know You more', remainingContent.indexOf('And when my daily'))),
-        remainingContent.substring(remainingContent.lastIndexOf('Oh, I want to know You more'))
-      ].map(p => p.trim()).filter(p => p !== '');
-      
-    } else {
-      songTitle = sections[0];
-      lyricsParagraphs = sections.slice(1);
-    }
-    
-    // Clean up paragraphs - normalize whitespace but preserve intentional line breaks
-    lyricsParagraphs = lyricsParagraphs.map(paragraph => {
-      return paragraph.replace(/[ \t]+/g, ' ') // Replace multiple spaces/tabs with single space
-                     .replace(/\n +/g, '\n')    // Remove spaces at beginning of lines
-                     .replace(/ +\n/g, '\n')    // Remove spaces at end of lines
-                     .trim();
-    });
-    
-    Logger.log('Song title: "' + songTitle + '"');
-    Logger.log('Number of lyric paragraphs: ' + lyricsParagraphs.length);
-    
-    Logger.log('Final lyric paragraphs:');
-    lyricsParagraphs.forEach((para, index) => {
-      Logger.log(`Paragraph ${index + 1}: "${para}"`);
-    });
-    
-    // Return the data
     return {
       title: songTitle,
       lyrics: lyricsParagraphs,
@@ -993,8 +985,6 @@ function searchGmailForPraiseLyrics() {
     };
     
   } catch (error) {
-    Logger.log('Error searching Gmail: ' + error.toString());
-    Logger.log('Error stack: ' + error.stack);
     return null;
   }
 }
@@ -1004,13 +994,11 @@ function searchGmailForPraiseLyrics() {
  */
 function updatePraiseSongSlides(presentation, praiseData) {
   if (!praiseData) {
-    Logger.log('No praise song data to add');
     return;
   }
   
   try {
     const slides = presentation.getSlides();
-    Logger.log('Adding praise song slides to presentation with ' + slides.length + ' slides');
     
     // Replace {{praise_song}} in all slides
     slides.forEach((slide, index) => {
@@ -1023,7 +1011,6 @@ function updatePraiseSongSlides(presentation, praiseData) {
           const text = textRange.asString();
           if (text.includes('{{praise_song}}')) {
             textRange.replaceAllText('{{praise_song}}', praiseData.title);
-            Logger.log('Replaced {{praise_song}} with "' + praiseData.title + '" on slide ' + (index + 1));
           }
         } catch (error) {
           // Skip shapes that don't have text
@@ -1033,7 +1020,6 @@ function updatePraiseSongSlides(presentation, praiseData) {
     
     // Find the template slide containing {{praise_lyrics}}
     let templateSlide = null;
-    let templateSlideIndex = -1;
     
     for (let i = 0; i < slides.length; i++) {
       const slide = slides[i];
@@ -1044,7 +1030,6 @@ function updatePraiseSongSlides(presentation, praiseData) {
           const text = shape.getText().asString();
           if (text.includes('{{praise_lyrics}}')) {
             templateSlide = slide;
-            templateSlideIndex = i;
             break;
           }
         } catch (error) {
@@ -1056,37 +1041,38 @@ function updatePraiseSongSlides(presentation, praiseData) {
     }
     
     if (!templateSlide) {
-      Logger.log('Could not find slide with {{praise_lyrics}} placeholder');
       return;
     }
     
-    Logger.log('Found {{praise_lyrics}} template on slide ' + (templateSlideIndex + 1));
+    // Filter out any empty paragraphs before processing
+    const validParagraphs = praiseData.lyrics.filter(para => para && para.trim() !== '');
     
-    // First, create duplicates for all paragraphs BEFORE modifying any text
-    // This ensures we're always duplicating the original template
-    const createdSlides = [templateSlide]; // First slide is the original template
-    
-    // Create duplicate slides for paragraphs 2 and onwards
-    for (let i = 1; i < praiseData.lyrics.length; i++) {
-      const duplicatedSlide = templateSlide.duplicate();
-      createdSlides.push(duplicatedSlide);
-      Logger.log('Created duplicate slide for paragraph ' + (i + 1));
+    if (validParagraphs.length === 0) {
+      return;
     }
     
-    // Now update the text in each slide
-    praiseData.lyrics.forEach((paragraph, index) => {
-      if (paragraph.trim() === '') return; // Skip empty paragraphs
-      
-      const targetSlide = createdSlides[index];
-      if (!targetSlide) {
-        Logger.log('Warning: No slide available for paragraph ' + (index + 1));
-        return;
-      }
+    // Create all slides first
+    const duplicatedSlides = [];
+    
+    // Create duplicates for remaining paragraphs (excluding first one)
+    for (let i = 1; i < validParagraphs.length; i++) {
+      const duplicatedSlide = templateSlide.duplicate();
+      duplicatedSlides.push(duplicatedSlide);
+    }
+    
+    // Reverse the duplicated slides to get correct order
+    duplicatedSlides.reverse();
+    
+    // Build the final array: template slide + reversed duplicates
+    const allSlides = [templateSlide, ...duplicatedSlides];
+    
+    // Update each slide with its corresponding paragraph
+    for (let i = 0; i < validParagraphs.length; i++) {
+      const targetSlide = allSlides[i];
+      const paragraph = validParagraphs[i];
       
       // Find and update the text shape containing {{praise_lyrics}}
       const shapes = targetSlide.getShapes();
-      let textUpdated = false;
-      
       shapes.forEach(shape => {
         try {
           const textRange = shape.getText();
@@ -1095,26 +1081,16 @@ function updatePraiseSongSlides(presentation, praiseData) {
           const text = textRange.asString();
           if (text.includes('{{praise_lyrics}}')) {
             textRange.replaceAllText('{{praise_lyrics}}', paragraph.trim());
-            // Apply font sizing for the paragraph
             adjustFontSizeToFitShape(shape, paragraph.trim());
-            Logger.log('Updated paragraph ' + (index + 1) + ' on slide with text: "' + paragraph.substring(0, 50) + '..."');
-            textUpdated = true;
           }
         } catch (error) {
-          Logger.log('Error updating shape: ' + error.toString());
+          // Skip shapes that don't have text
         }
       });
-      
-      if (!textUpdated) {
-        Logger.log('Warning: Could not find {{praise_lyrics}} placeholder in slide shapes for paragraph ' + (index + 1));
-      }
-    });
-    
-    Logger.log('Successfully added praise song slides with ' + praiseData.lyrics.length + ' paragraphs');
+    }
     
   } catch (error) {
-    Logger.log('Error adding praise song slides: ' + error.toString());
-    Logger.log('Error stack: ' + error.stack);
+    // Silent error handling
   }
 }
 
