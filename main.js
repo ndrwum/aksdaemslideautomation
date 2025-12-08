@@ -2,12 +2,13 @@
  * Google Apps Script for automating hymn slides creation
  * This script reads from a spreadsheet and creates a presentation with hymn lyrics
  * Now includes Gmail integration for praise/worship songs
+ * Updated to include cleaning announcements
  */
 
 // Configuration constants
 const CONFIG = {
-  TEMPLATE_ID: 'HIDDEN',
-  SPREADSHEET_ID: 'HIDDEN',
+  TEMPLATE_ID: '<hidden>',
+  SPREADSHEET_ID: '<hidden>',
   MIN_FONT_SIZE: 50,
   DEFAULT_FONT_SIZE: 60,
   LINE_SPACING: 2
@@ -23,7 +24,8 @@ const COLUMNS = {
   SPEAKER: 'Speaker',
   SPECIAL_MUSIC: 'Special Music',
   INTERCESSORY_PRAYER: 'Intercessory Prayer',
-  CHILDREN_STORY: "Children's Story"
+  CHILDREN_STORY: "Children's Story",
+  CLEANING: 'Cleaning'
 };
 
 // Add the new placeholders
@@ -41,11 +43,13 @@ const PLACEHOLDERS = {
   READING: '{{reading}}',
   STORY: '{{story}}',
   PRAISE_SONG: '{{praise_song}}',
-  PRAISE_LYRICS: '{{praise_lyrics}}'
+  PRAISE_LYRICS: '{{praise_lyrics}}',
+  TODAY_ACCOUNCEMENT: '{{today_accouncement}}',
+  UPCOMING_ACCOUNCEMENT: '{{upcoming_accouncement}}'
 };
 
 /**
- * Main function to create hymn slides (updated to include praise songs)
+ * Main function to create hymn slides (updated to include praise songs and cleaning announcements)
  */
 function createHymnsSlides() {
   try {
@@ -86,7 +90,10 @@ function createHymnsSlides() {
     // Search for praise/worship lyrics in Gmail
     const praiseData = searchGmailForPraiseLyrics();
     
-    createPresentation(hymnsData, hymnDetails, scriptureContent, upcomingSaturdayString, praiseData);
+    // Get cleaning announcements
+    const cleaningAnnouncements = getCleaningAnnouncements(targetSheet, upcomingSaturday);
+    
+    createPresentation(hymnsData, hymnDetails, scriptureContent, upcomingSaturdayString, praiseData, cleaningAnnouncements);
     
   } catch (error) {
     Logger.log('Error in createHymnsSlides: ' + error.toString());
@@ -95,9 +102,74 @@ function createHymnsSlides() {
 }
 
 /**
- * Creates the presentation with all slides (updated to include praise songs)
+ * Gets cleaning announcements for current and next Saturday
  */
-function createPresentation(hymnsData, hymnDetails, scriptureContent, presentationName, praiseData) {
+function getCleaningAnnouncements(sheet, upcomingSaturday) {
+  try {
+    const dataRange = sheet.getDataRange().getValues();
+    if (dataRange.length < 2) {
+      Logger.log('Sheet has insufficient data for cleaning announcements');
+      return { today: '', upcoming: '' };
+    }
+    
+    const headerRow = dataRange[1]; // Assuming headers are in row 2
+    const columnIndices = getColumnIndices(headerRow);
+    
+    if (columnIndices.cleaning === undefined) {
+      Logger.log('Cleaning column not found');
+      return { today: '', upcoming: '' };
+    }
+    
+    const upcomingSaturdayString = getDateFormatted(upcomingSaturday);
+    
+    // Calculate next Saturday (7 days after upcoming Saturday)
+    const nextSaturday = new Date(upcomingSaturday);
+    nextSaturday.setDate(nextSaturday.getDate() + 7);
+    const nextSaturdayString = getDateFormatted(nextSaturday);
+    
+    let todayAnnouncement = '';
+    let upcomingAnnouncement = '';
+    
+    // Find the rows for both dates
+    for (let i = 2; i < dataRange.length; i++) {
+      const dateCell = dataRange[i][0];
+      
+      if (dateCell instanceof Date) {
+        const dateString = getDateFormatted(dateCell);
+        
+        if (dateString === upcomingSaturdayString) {
+          const cleaningContent = dataRange[i][columnIndices.cleaning] || '';
+          if (cleaningContent) {
+            todayAnnouncement = 'Dishwashers+table cleaners: ' + cleaningContent;
+          }
+          Logger.log('Found cleaning for upcoming Saturday: ' + cleaningContent);
+        }
+        
+        if (dateString === nextSaturdayString) {
+          const cleaningContent = dataRange[i][columnIndices.cleaning] || '';
+          if (cleaningContent) {
+            upcomingAnnouncement = 'Dishwashers+table cleaners: ' + cleaningContent;
+          }
+          Logger.log('Found cleaning for next Saturday: ' + cleaningContent);
+        }
+      }
+    }
+    
+    return {
+      today: todayAnnouncement,
+      upcoming: upcomingAnnouncement
+    };
+    
+  } catch (error) {
+    Logger.log('Error getting cleaning announcements: ' + error.toString());
+    return { today: '', upcoming: '' };
+  }
+}
+
+/**
+ * Creates the presentation with all slides (updated to include praise songs and cleaning announcements)
+ */
+function createPresentation(hymnsData, hymnDetails, scriptureContent, presentationName, praiseData, cleaningAnnouncements) {
   try {
     Logger.log('Creating presentation with name: ' + presentationName);
     
@@ -124,6 +196,9 @@ function createPresentation(hymnsData, hymnDetails, scriptureContent, presentati
     updateSermonSlides(slides, hymnsData.sermonTitle);
     updateParticipantsSlides(slides, hymnsData);
     
+    // Update cleaning announcements
+    updateCleaningAnnouncementSlides(slides, cleaningAnnouncements);
+    
     // Add praise song slides if email was found
     if (praiseData) {
       updatePraiseSongSlides(presentation, praiseData);
@@ -147,18 +222,56 @@ function createPresentation(hymnsData, hymnDetails, scriptureContent, presentati
 }
 
 /**
- * Finds the target sheet containing "Sabbath Schedule 2024"
+ * Updates slides with cleaning announcement placeholders
+ */
+function updateCleaningAnnouncementSlides(slides, cleaningAnnouncements) {
+  try {
+    Logger.log('Updating cleaning announcements:', cleaningAnnouncements);
+    
+    slides.forEach((slide, index) => {
+      const shapes = slide.getShapes();
+      shapes.forEach(shape => {
+        try {
+          const textRange = shape.getText();
+          if (!textRange) return;
+          
+          const text = textRange.asString();
+          
+          // Replace today's announcement (with the typo as in user's template)
+          if (text.includes(PLACEHOLDERS.TODAY_ACCOUNCEMENT)) {
+            textRange.replaceAllText(PLACEHOLDERS.TODAY_ACCOUNCEMENT, cleaningAnnouncements.today);
+            Logger.log(`Replaced today's announcement on slide ${index + 1}`);
+          }
+          
+          // Replace upcoming announcement (with the typo as in user's template)
+          if (text.includes(PLACEHOLDERS.UPCOMING_ACCOUNCEMENT)) {
+            textRange.replaceAllText(PLACEHOLDERS.UPCOMING_ACCOUNCEMENT, cleaningAnnouncements.upcoming);
+            Logger.log(`Replaced upcoming announcement on slide ${index + 1}`);
+          }
+        } catch (error) {
+          Logger.log(`Error processing shape in slide ${index}: ${error}`);
+        }
+      });
+    });
+    
+  } catch (error) {
+    Logger.log('Error updating cleaning announcement slides: ' + error.toString());
+  }
+}
+
+/**
+ * Finds the target sheet containing "Sabbath Schedule"
  */
 function findTargetSheet(spreadsheet) {
   try {
     const sheets = spreadsheet.getSheets();
     for (let sheet of sheets) {
-      if (sheet.getName().includes("Sabbath Schedule 2024")) {
+      if (sheet.getName().includes("Sabbath Schedule")) {
         Logger.log('Found target sheet: ' + sheet.getName());
         return sheet;
       }
     }
-    Logger.log('No sheet found containing "Sabbath Schedule 2024"');
+    Logger.log('No sheet found containing "Sabbath Schedule"');
     return null;
   } catch (error) {
     Logger.log('Error finding target sheet: ' + error.toString());
@@ -265,6 +378,9 @@ function getColumnIndices(headerRow) {
         break;
       case "Children's Story":
         indices.story = index;
+        break;
+      case 'Cleaning':
+        indices.cleaning = index;
         break;
     }
   });
@@ -836,15 +952,16 @@ function searchGmailForPraiseLyrics() {
   try {
     // Calculate date 6 days ago
     const tenDaysAgo = new Date();
-    tenDaysAgo.setDate(tenDaysAgo.getDate() - 6);
+    tenDaysAgo.setDate(tenDaysAgo.getDate() - 5);
     const dateString = Utilities.formatDate(tenDaysAgo, Session.getScriptTimeZone(), 'yyyy/MM/dd');
     
     // Search for emails with (praise AND lyrics) OR (worship AND lyrics) in subject within past 6 days
     const searchQuery = `after:${dateString} (subject:(praise lyrics) OR subject:(worship lyrics))`;
     
-    const threads = GmailApp.search(searchQuery, 0, 6);
+    const threads = GmailApp.search(searchQuery, 0, 5);
     
     if (threads.length === 0) {
+      Logger.log('No praise/worship email threads found');
       return null;
     }
     
@@ -852,139 +969,199 @@ function searchGmailForPraiseLyrics() {
     const mostRecentThread = threads[0];
     const message = mostRecentThread.getMessages()[0];
     
-    // Try HTML version first since it's more likely to preserve formatting
+    // Get the HTML body
     let emailBody = message.getBody();
-    let isHtml = true;
     
     // If HTML is empty, try plain text
     if (!emailBody || emailBody.trim() === '') {
       emailBody = message.getPlainBody();
-      isHtml = false;
-    }
-    
-    if (isHtml) {
-      // Preserve the structure better by being more careful with HTML conversion
-      // Look for div and p tags that indicate paragraph breaks
-      emailBody = emailBody.replace(/<\/div>\s*<div[^>]*>/gi, '\n\n')  // Div to div = paragraph break
-                          .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')        // P to p = paragraph break
-                          .replace(/<br\s*\/?>\s*<br\s*\/?>/gi, '\n\n') // Double br = paragraph break
-                          .replace(/<br\s*\/?>/gi, '\n')               // Single br = line break
-                          .replace(/<\/?(div|p)[^>]*>/gi, '\n')        // Remove remaining div/p tags
-                          .replace(/<\/?(strong|b|em|i|u)[^>]*>/gi, '') // Remove formatting tags
-                          .replace(/<[^>]*>/g, '');                    // Remove all other HTML tags
       
-      // Clean up HTML entities
-      emailBody = emailBody.replace(/&nbsp;/g, ' ')
-                          .replace(/&amp;/g, '&')
-                          .replace(/&lt;/g, '<')
-                          .replace(/&gt;/g, '>')
-                          .replace(/&quot;/g, '"')
-                          .replace(/&#39;/g, "'")
-                          .replace(/&#\d+;/g, '');
-    }
-    
-    // Remove markdown formatting
-    emailBody = emailBody.replace(/^\*\*(.*?)\*\*$/gm, '$1') // Remove **bold** formatting
-                        .replace(/^\*(.*?)\*$/gm, '$1');     // Remove *italic* formatting
-    
-    // Clean up whitespace while preserving structure
-    emailBody = emailBody.replace(/[ \t]+/g, ' ')           // Multiple spaces to single
-                        .replace(/\n[ \t]+/g, '\n')         // Remove spaces at start of lines
-                        .replace(/[ \t]+\n/g, '\n')         // Remove spaces at end of lines
-                        .replace(/\n{3,}/g, '\n\n')         // Limit to double line breaks
-                        .trim();
-    
-    // Split by double line breaks to get paragraphs
-    let sections = emailBody.split(/\n\s*\n/)
-                           .map(section => section.trim())
-                           .filter(section => section !== '');
-    
-    // If we still don't have proper paragraph separation, use a more robust approach
-    if (sections.length <= 1) {
-      // Split by single line breaks and analyze the structure
-      let lines = emailBody.split(/\n/)
-                          .map(line => line.trim())
-                          .filter(line => line !== '');
+      // For plain text, split by double newlines
+      const lines = emailBody.split('\n').map(line => line.trim()).filter(line => line !== '');
       
-      if (lines.length === 0) {
+      if (lines.length < 2) {
+        Logger.log('Not enough content in plain text email');
         return null;
       }
       
-      // First line is the title
+      // First line is title
       const songTitle = lines[0];
-      const remainingLines = lines.slice(1);
       
-      // Group lines into paragraphs by looking for empty lines or logical breaks
-      const lyricsParagraphs = [];
+      // Group remaining lines into paragraphs based on empty lines
+      const lyrics = [];
       let currentParagraph = [];
-      let emptyLinesSeen = 0;
       
-      for (let i = 0; i < remainingLines.length; i++) {
-        const line = remainingLines[i];
-        
-        // If line is empty or just whitespace, increment counter
-        if (line.trim() === '') {
-          emptyLinesSeen++;
-          continue;
-        }
-        
-        // If we've seen empty lines, start a new paragraph
-        if (emptyLinesSeen > 0 && currentParagraph.length > 0) {
-          lyricsParagraphs.push(currentParagraph.join('\n'));
-          currentParagraph = [];
-        }
-        
-        emptyLinesSeen = 0;
-        currentParagraph.push(line);
-      }
-      
-      // Add the last paragraph if it exists
-      if (currentParagraph.length > 0) {
-        lyricsParagraphs.push(currentParagraph.join('\n'));
-      }
-      
-      // If we still have everything in one paragraph, try to split it more intelligently
-      if (lyricsParagraphs.length === 1) {
-        const allText = lyricsParagraphs[0];
-        const allLines = allText.split('\n');
-        
-        // Split into chunks of 4-6 lines each
-        const newParagraphs = [];
-        for (let i = 0; i < allLines.length; i += 4) {
-          const chunk = allLines.slice(i, i + 6); // Take up to 6 lines
-          if (chunk.length > 0) {
-            newParagraphs.push(chunk.join('\n'));
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i] === '') {
+          if (currentParagraph.length > 0) {
+            lyrics.push(currentParagraph.join('\n'));
+            currentParagraph = [];
           }
+        } else {
+          currentParagraph.push(lines[i]);
         }
-        
-        return {
-          title: songTitle,
-          lyrics: newParagraphs,
-          subject: message.getSubject(),
-          date: message.getDate()
-        };
+      }
+      
+      if (currentParagraph.length > 0) {
+        lyrics.push(currentParagraph.join('\n'));
       }
       
       return {
         title: songTitle,
-        lyrics: lyricsParagraphs,
+        lyrics: lyrics,
         subject: message.getSubject(),
         date: message.getDate()
       };
     }
     
-    // We have clear paragraph breaks from the original email
-    const songTitle = sections[0];
-    const lyricsParagraphs = sections.slice(1);
+    // Process HTML email
+    Logger.log('Processing HTML email');
     
-    return {
-      title: songTitle,
-      lyrics: lyricsParagraphs,
-      subject: message.getSubject(),
-      date: message.getDate()
-    };
+    // Extract all div contents in order
+    const divPattern = /<div[^>]*>(.*?)<\/div>/gi;
+    const divContents = [];
+    let match;
+    
+    while ((match = divPattern.exec(emailBody)) !== null) {
+      let content = match[1];
+      
+      // Check if this is just a <br> (paragraph separator)
+      if (content.match(/^\s*<br\s*\/?>\s*$/)) {
+        divContents.push('||BREAK||');
+      } else {
+        // Clean the content
+        content = content.replace(/<br\s*\/?>/gi, ' ')
+                        .replace(/<[^>]*>/g, '')
+                        .trim();
+        
+        if (content !== '') {
+          // Decode HTML entities and quoted-printable
+          content = content.replace(/&nbsp;/g, ' ')
+                          .replace(/&amp;/g, '&')
+                          .replace(/&lt;/g, '<')
+                          .replace(/&gt;/g, '>')
+                          .replace(/&quot;/g, '"')
+                          .replace(/&#39;/g, "'")
+                          .replace(/&#\d+;/g, '')
+                          .replace(/=E2=80=99/g, "'")
+                          .replace(/=\r?\n/g, '')
+                          .replace(/=[0-9A-F]{2}/gi, '');
+          
+          divContents.push(content);
+        }
+      }
+    }
+    
+    Logger.log('Found ' + divContents.length + ' div elements');
+    
+    // Now group the content based on ||BREAK|| markers
+    const sections = [];
+    let currentSection = [];
+    
+    for (let item of divContents) {
+      if (item === '||BREAK||') {
+        if (currentSection.length > 0) {
+          sections.push(currentSection.join('\n'));
+          currentSection = [];
+        }
+      } else {
+        currentSection.push(item);
+      }
+    }
+    
+    // Don't forget the last section
+    if (currentSection.length > 0) {
+      sections.push(currentSection.join('\n'));
+    }
+    
+    Logger.log('Grouped into ' + sections.length + ' sections');
+    
+    // If we have sections, first is title, rest are lyrics
+    if (sections.length >= 2) {
+      const songTitle = sections[0];
+      const lyrics = sections.slice(1);
+      
+      Logger.log('Title: ' + songTitle);
+      Logger.log('Number of lyric sections: ' + lyrics.length);
+      
+      return {
+        title: songTitle,
+        lyrics: lyrics,
+        subject: message.getSubject(),
+        date: message.getDate()
+      };
+    }
+    
+    // Fallback: If we don't have clear sections but have divContents
+    // First non-break item is title, group rest by breaks
+    if (divContents.length > 0) {
+      // Filter out breaks and get real content
+      const contentOnly = divContents.filter(item => item !== '||BREAK||');
+      
+      if (contentOnly.length < 2) {
+        Logger.log('Not enough content found');
+        return null;
+      }
+      
+      const songTitle = contentOnly[0];
+      
+      // Group remaining content - look for natural paragraph breaks
+      // Based on your screenshot: 2 lines, 4 lines, 4 lines, 4 lines
+      const remainingLines = contentOnly.slice(1);
+      const lyrics = [];
+      
+      // Your song structure appears to be:
+      // First verse: 2 lines
+      // Chorus: 4 lines  
+      // Second verse: 4 lines
+      // Chorus repeat: 4 lines
+      
+      if (remainingLines.length >= 14) {
+        // We have enough lines for the full structure
+        lyrics.push(remainingLines.slice(0, 2).join('\n'));  // First verse (2 lines)
+        lyrics.push(remainingLines.slice(2, 6).join('\n'));  // First chorus (4 lines)
+        lyrics.push(remainingLines.slice(6, 10).join('\n')); // Second verse (4 lines)
+        lyrics.push(remainingLines.slice(10, 14).join('\n')); // Second chorus (4 lines)
+      } else {
+        // Try to intelligently group based on content
+        let currentVerse = [];
+        
+        for (let i = 0; i < remainingLines.length; i++) {
+          const line = remainingLines[i];
+          currentVerse.push(line);
+          
+          // Check if this line suggests end of a verse/chorus
+          // Look for lines ending with "silver", "gold", "will", "within", "sin"
+          if (line.match(/(silver|gold|will|within|sin)$/i) || 
+              (currentVerse.length === 4) || 
+              (currentVerse.length === 2 && i < 4)) {
+            lyrics.push(currentVerse.join('\n'));
+            currentVerse = [];
+          }
+        }
+        
+        // Add any remaining lines
+        if (currentVerse.length > 0) {
+          lyrics.push(currentVerse.join('\n'));
+        }
+      }
+      
+      Logger.log('Parsed title: ' + songTitle);
+      Logger.log('Created ' + lyrics.length + ' lyric sections');
+      
+      return {
+        title: songTitle,
+        lyrics: lyrics,
+        subject: message.getSubject(),
+        date: message.getDate()
+      };
+    }
+    
+    Logger.log('Could not parse email properly');
+    return null;
     
   } catch (error) {
+    Logger.log('Error searching Gmail for praise lyrics: ' + error.toString());
     return null;
   }
 }
@@ -994,13 +1171,19 @@ function searchGmailForPraiseLyrics() {
  */
 function updatePraiseSongSlides(presentation, praiseData) {
   if (!praiseData) {
+    Logger.log('No praise data to process');
     return;
   }
   
   try {
+    Logger.log('Starting updatePraiseSongSlides with data:');
+    Logger.log('Title: ' + praiseData.title);
+    Logger.log('Number of lyric sections: ' + praiseData.lyrics.length);
+    
     const slides = presentation.getSlides();
     
-    // Replace {{praise_song}} in all slides
+    // First, replace {{praise_song}} with the title in all slides
+    let praiseSongFound = false;
     slides.forEach((slide, index) => {
       const shapes = slide.getShapes();
       shapes.forEach(shape => {
@@ -1009,8 +1192,10 @@ function updatePraiseSongSlides(presentation, praiseData) {
           if (!textRange) return;
           
           const text = textRange.asString();
-          if (text.includes('{{praise_song}}')) {
-            textRange.replaceAllText('{{praise_song}}', praiseData.title);
+          if (text.includes(PLACEHOLDERS.PRAISE_SONG)) {
+            textRange.replaceAllText(PLACEHOLDERS.PRAISE_SONG, praiseData.title);
+            praiseSongFound = true;
+            Logger.log('Replaced {{praise_song}} with title on slide ' + (index + 1));
           }
         } catch (error) {
           // Skip shapes that don't have text
@@ -1018,8 +1203,13 @@ function updatePraiseSongSlides(presentation, praiseData) {
       });
     });
     
+    if (!praiseSongFound) {
+      Logger.log('Warning: {{praise_song}} placeholder not found');
+    }
+    
     // Find the template slide containing {{praise_lyrics}}
     let templateSlide = null;
+    let templateSlideIndex = -1;
     
     for (let i = 0; i < slides.length; i++) {
       const slide = slides[i];
@@ -1028,8 +1218,10 @@ function updatePraiseSongSlides(presentation, praiseData) {
       for (let shape of shapes) {
         try {
           const text = shape.getText().asString();
-          if (text.includes('{{praise_lyrics}}')) {
+          if (text.includes(PLACEHOLDERS.PRAISE_LYRICS)) {
             templateSlide = slide;
+            templateSlideIndex = i;
+            Logger.log('Found {{praise_lyrics}} placeholder on slide ' + (i + 1));
             break;
           }
         } catch (error) {
@@ -1041,47 +1233,129 @@ function updatePraiseSongSlides(presentation, praiseData) {
     }
     
     if (!templateSlide) {
-      return;
+      Logger.log('Warning: {{praise_lyrics}} placeholder not found in any slide');
+      
+      // Alternative: If we can't find {{praise_lyrics}}, check if {{praise_song}} was replaced
+      // and use that slide to add the lyrics
+      for (let i = 0; i < slides.length; i++) {
+        const slide = slides[i];
+        const shapes = slide.getShapes();
+        
+        for (let shape of shapes) {
+          try {
+            const text = shape.getText().asString();
+            // Check if this slide contains the praise song title we just added
+            if (text.includes(praiseData.title)) {
+              // This might be our target slide
+              // Replace the entire content with first verse, then duplicate for others
+              templateSlide = slide;
+              templateSlideIndex = i;
+              Logger.log('Using slide with praise song title as template (slide ' + (i + 1) + ')');
+              
+              // Replace the title with the first verse
+              const firstVerse = praiseData.lyrics[0];
+              if (firstVerse) {
+                shape.getText().setText(firstVerse);
+                adjustFontSizeToFitShape(shape, firstVerse);
+                Logger.log('Replaced title with first verse');
+                
+                // Now create additional slides for remaining verses
+                for (let j = 1; j < praiseData.lyrics.length; j++) {
+                  const newSlide = slide.duplicate();
+                  const newShapes = newSlide.getShapes();
+                  
+                  // Find the text shape in the new slide
+                  for (let newShape of newShapes) {
+                    try {
+                      const textRange = newShape.getText();
+                      if (textRange && textRange.asString().includes(firstVerse)) {
+                        textRange.setText(praiseData.lyrics[j]);
+                        adjustFontSizeToFitShape(newShape, praiseData.lyrics[j]);
+                        Logger.log('Created slide ' + (j + 1) + ' for verse: ' + praiseData.lyrics[j].substring(0, 30) + '...');
+                        break;
+                      }
+                    } catch (error) {
+                      // Continue
+                    }
+                  }
+                }
+                
+                return; // We're done
+              }
+              break;
+            }
+          } catch (error) {
+            // Skip shapes that don't have text
+          }
+        }
+        
+        if (templateSlide) break;
+      }
+      
+      if (!templateSlide) {
+        Logger.log('Could not find any slide to use for praise lyrics');
+        return;
+      }
     }
     
     // Filter out any empty paragraphs before processing
     const validParagraphs = praiseData.lyrics.filter(para => para && para.trim() !== '');
     
+    Logger.log('Valid paragraphs to create: ' + validParagraphs.length);
+    
     if (validParagraphs.length === 0) {
+      Logger.log('No valid paragraphs to process');
       return;
     }
     
-    // Create all slides first
-    const duplicatedSlides = [];
+    // Log each paragraph for debugging
+    validParagraphs.forEach((para, index) => {
+      Logger.log('Paragraph ' + (index + 1) + ': ' + para.substring(0, 50) + '...');
+    });
     
-    // Create duplicates for remaining paragraphs (excluding first one)
-    for (let i = 1; i < validParagraphs.length; i++) {
-      const duplicatedSlide = templateSlide.duplicate();
-      duplicatedSlides.push(duplicatedSlide);
+    // Create slides for each paragraph
+    // First, update the template slide with the first paragraph
+    const shapes = templateSlide.getShapes();
+    let lyricsShapeFound = false;
+    
+    shapes.forEach(shape => {
+      try {
+        const textRange = shape.getText();
+        if (!textRange) return;
+        
+        const text = textRange.asString();
+        if (text.includes(PLACEHOLDERS.PRAISE_LYRICS)) {
+          textRange.replaceAllText(PLACEHOLDERS.PRAISE_LYRICS, validParagraphs[0].trim());
+          adjustFontSizeToFitShape(shape, validParagraphs[0].trim());
+          lyricsShapeFound = true;
+          Logger.log('Replaced {{praise_lyrics}} with first paragraph');
+        }
+      } catch (error) {
+        // Skip shapes that don't have text
+      }
+    });
+    
+    if (!lyricsShapeFound) {
+      Logger.log('Warning: Could not find {{praise_lyrics}} in the template slide shapes');
     }
     
-    // Reverse the duplicated slides to get correct order
-    duplicatedSlides.reverse();
-    
-    // Build the final array: template slide + reversed duplicates
-    const allSlides = [templateSlide, ...duplicatedSlides];
-    
-    // Update each slide with its corresponding paragraph
-    for (let i = 0; i < validParagraphs.length; i++) {
-      const targetSlide = allSlides[i];
-      const paragraph = validParagraphs[i];
+    // Create duplicates for remaining paragraphs
+    for (let i = 1; i < validParagraphs.length; i++) {
+      const newSlide = templateSlide.duplicate();
+      const newShapes = newSlide.getShapes();
       
-      // Find and update the text shape containing {{praise_lyrics}}
-      const shapes = targetSlide.getShapes();
-      shapes.forEach(shape => {
+      // Update the text in the duplicated slide
+      newShapes.forEach(shape => {
         try {
           const textRange = shape.getText();
           if (!textRange) return;
           
           const text = textRange.asString();
-          if (text.includes('{{praise_lyrics}}')) {
-            textRange.replaceAllText('{{praise_lyrics}}', paragraph.trim());
-            adjustFontSizeToFitShape(shape, paragraph.trim());
+          // The duplicated slide will have the first paragraph, replace it with the current paragraph
+          if (text.includes(validParagraphs[0].trim())) {
+            textRange.setText(validParagraphs[i].trim());
+            adjustFontSizeToFitShape(shape, validParagraphs[i].trim());
+            Logger.log('Created slide for paragraph ' + (i + 1));
           }
         } catch (error) {
           // Skip shapes that don't have text
@@ -1089,8 +1363,10 @@ function updatePraiseSongSlides(presentation, praiseData) {
       });
     }
     
+    Logger.log('Praise song slides creation completed');
+    
   } catch (error) {
-    // Silent error handling
+    Logger.log('Error in updatePraiseSongSlides: ' + error.toString());
   }
 }
 
@@ -1112,6 +1388,11 @@ function testScript() {
       const targetSheet = findTargetSheet(spreadsheet);
       if (targetSheet) {
         Logger.log('Found target sheet: ' + targetSheet.getName());
+        
+        // Test cleaning announcements
+        const cleaningAnnouncements = getCleaningAnnouncements(targetSheet, upcomingSaturday);
+        Logger.log('Today\'s cleaning announcement: ' + cleaningAnnouncements.today);
+        Logger.log('Upcoming cleaning announcement: ' + cleaningAnnouncements.upcoming);
       } else {
         Logger.log('Could not find target sheet');
       }
