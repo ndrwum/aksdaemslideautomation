@@ -1,8 +1,6 @@
 /**
  * Google Apps Script for automating hymn slides creation
  * This script reads from a spreadsheet and creates a presentation with hymn lyrics
- * Now includes Gmail integration for praise/worship songs
- * Updated to include cleaning announcements
  */
 
 // Configuration constants
@@ -24,11 +22,10 @@ const COLUMNS = {
   SPEAKER: 'Speaker',
   SPECIAL_MUSIC: 'Special Music',
   INTERCESSORY_PRAYER: 'Intercessory Prayer',
-  CHILDREN_STORY: "Children's Story",
-  CLEANING: 'Cleaning'
+  CHILDREN_STORY: "Children's Story"
 };
 
-// Add the new placeholders
+// Placeholders
 const PLACEHOLDERS = {
   OPENING: '{{opening}}',
   CLOSING: '{{closing}}',
@@ -44,16 +41,20 @@ const PLACEHOLDERS = {
   STORY: '{{story}}',
   PRAISE_SONG: '{{praise_song}}',
   PRAISE_LYRICS: '{{praise_lyrics}}',
-  TODAY_ACCOUNCEMENT: '{{today_accouncement}}',
-  UPCOMING_ACCOUNCEMENT: '{{upcoming_accouncement}}'
+  THIS_WEEK_DATE: '{{this_week_date}}',
+  THIS_WEEK_LEADERS: '{{this_week_leaders}}',
+  NEXT_WEEK_DATE: '{{next_week_date}}',
+  NEXT_WEEK_LEADERS: '{{next_week_leaders}}',
+  WEEK_AFTER_DATE: '{{week_after_date}}',
+  WEEK_AFTER_LEADERS: '{{week_after_leaders}}'
 };
 
 /**
- * Main function to create hymn slides (updated to include praise songs and cleaning announcements)
+ * Main function to create hymn slides
  */
 function createHymnsSlides() {
   try {
-    Logger.log('Starting createHymnsSlides function');
+    Logger.log('Starting createHymnsSlides');
     
     const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
     if (!spreadsheet) {
@@ -72,7 +73,6 @@ function createHymnsSlides() {
     Logger.log('Looking for date: ' + upcomingSaturdayString);
 
     const hymnsData = extractHymnsData(targetSheet, upcomingSaturdayString);
-    Logger.log('Extracted data:', hymnsData);
 
     if (!hymnsData.openingHymnNumber || !hymnsData.closingHymnNumber) {
       Logger.log('Missing hymn numbers');
@@ -86,92 +86,166 @@ function createHymnsSlides() {
     }
 
     const scriptureContent = fetchScriptureContent(hymnsData.scriptureReading);
-    
-    // Search for praise/worship lyrics in Gmail
     const praiseData = searchGmailForPraiseLyrics();
+    const bulletinLeadersData = getBulletinLeadersData(spreadsheet, upcomingSaturday);
     
-    // Get cleaning announcements
-    const cleaningAnnouncements = getCleaningAnnouncements(targetSheet, upcomingSaturday);
-    
-    createPresentation(hymnsData, hymnDetails, scriptureContent, upcomingSaturdayString, praiseData, cleaningAnnouncements);
+    createPresentation(hymnsData, hymnDetails, scriptureContent, upcomingSaturdayString, praiseData, bulletinLeadersData);
     
   } catch (error) {
     Logger.log('Error in createHymnsSlides: ' + error.toString());
-    Logger.log('Error stack: ' + error.stack);
   }
 }
 
 /**
- * Gets cleaning announcements for current and next Saturday
+ * Gets bulletin leaders data from "For Bulletin" sheet
  */
-function getCleaningAnnouncements(sheet, upcomingSaturday) {
+function getBulletinLeadersData(spreadsheet, upcomingSaturday) {
   try {
-    const dataRange = sheet.getDataRange().getValues();
+    const bulletinSheet = spreadsheet.getSheetByName('For Bulletin');
+    if (!bulletinSheet) {
+      Logger.log('Could not find "For Bulletin" sheet');
+      return null;
+    }
+    
+    const dataRange = bulletinSheet.getDataRange().getValues();
     if (dataRange.length < 2) {
-      Logger.log('Sheet has insufficient data for cleaning announcements');
-      return { today: '', upcoming: '' };
+      return null;
     }
     
-    const headerRow = dataRange[1]; // Assuming headers are in row 2
-    const columnIndices = getColumnIndices(headerRow);
+    const headerRow = dataRange[0];
     
-    if (columnIndices.cleaning === undefined) {
-      Logger.log('Cleaning column not found');
-      return { today: '', upcoming: '' };
-    }
+    const thisWeekSaturday = new Date(upcomingSaturday);
+    const nextWeekSaturday = new Date(upcomingSaturday);
+    nextWeekSaturday.setDate(nextWeekSaturday.getDate() + 7);
+    const weekAfterSaturday = new Date(upcomingSaturday);
+    weekAfterSaturday.setDate(weekAfterSaturday.getDate() + 14);
     
-    const upcomingSaturdayString = getDateFormatted(upcomingSaturday);
+    const thisWeekString = getDateFormatted(thisWeekSaturday);
+    const nextWeekString = getDateFormatted(nextWeekSaturday);
+    const weekAfterString = getDateFormatted(weekAfterSaturday);
     
-    // Calculate next Saturday (7 days after upcoming Saturday)
-    const nextSaturday = new Date(upcomingSaturday);
-    nextSaturday.setDate(nextSaturday.getDate() + 7);
-    const nextSaturdayString = getDateFormatted(nextSaturday);
+    let thisWeekData = null;
+    let nextWeekData = null;
+    let weekAfterData = null;
     
-    let todayAnnouncement = '';
-    let upcomingAnnouncement = '';
-    
-    // Find the rows for both dates
-    for (let i = 2; i < dataRange.length; i++) {
+    for (let i = 1; i < dataRange.length; i++) {
       const dateCell = dataRange[i][0];
       
       if (dateCell instanceof Date) {
         const dateString = getDateFormatted(dateCell);
         
-        if (dateString === upcomingSaturdayString) {
-          const cleaningContent = dataRange[i][columnIndices.cleaning] || '';
-          if (cleaningContent) {
-            todayAnnouncement = 'Dishwashers+table cleaners: ' + cleaningContent;
-          }
-          Logger.log('Found cleaning for upcoming Saturday: ' + cleaningContent);
+        if (dateString === thisWeekString) {
+          thisWeekData = formatBulletinRow(headerRow, dataRange[i], thisWeekSaturday);
         }
-        
-        if (dateString === nextSaturdayString) {
-          const cleaningContent = dataRange[i][columnIndices.cleaning] || '';
-          if (cleaningContent) {
-            upcomingAnnouncement = 'Dishwashers+table cleaners: ' + cleaningContent;
-          }
-          Logger.log('Found cleaning for next Saturday: ' + cleaningContent);
+        if (dateString === nextWeekString) {
+          nextWeekData = formatBulletinRow(headerRow, dataRange[i], nextWeekSaturday);
+        }
+        if (dateString === weekAfterString) {
+          weekAfterData = formatBulletinRow(headerRow, dataRange[i], weekAfterSaturday);
         }
       }
     }
     
     return {
-      today: todayAnnouncement,
-      upcoming: upcomingAnnouncement
+      thisWeek: thisWeekData || { date: thisWeekString, leaders: '' },
+      nextWeek: nextWeekData || { date: nextWeekString, leaders: '' },
+      weekAfter: weekAfterData || { date: weekAfterString, leaders: '' }
     };
     
   } catch (error) {
-    Logger.log('Error getting cleaning announcements: ' + error.toString());
-    return { today: '', upcoming: '' };
+    Logger.log('Error getting bulletin leaders data: ' + error.toString());
+    return null;
   }
 }
 
 /**
- * Creates the presentation with all slides (updated to include praise songs and cleaning announcements)
+ * Formats a bulletin row into the required format
  */
-function createPresentation(hymnsData, hymnDetails, scriptureContent, presentationName, praiseData, cleaningAnnouncements) {
+function formatBulletinRow(headerRow, rowData, date) {
   try {
-    Logger.log('Creating presentation with name: ' + presentationName);
+    const leaderPairs = [];
+    
+    for (let i = 1; i < headerRow.length; i++) {
+      const columnTitle = headerRow[i];
+      const cellValue = rowData[i];
+      
+      if (!columnTitle || columnTitle.toString().trim() === '') {
+        continue;
+      }
+      
+      if (cellValue !== undefined && cellValue !== null && cellValue.toString().trim() !== '') {
+        let formattedValue = '';
+        
+        if (columnTitle.toString().trim().toLowerCase() === 'cleaners') {
+          formattedValue = formatCleanersValue(cellValue.toString());
+        } else {
+          formattedValue = cellValue.toString().trim();
+        }
+        
+        leaderPairs.push(columnTitle.toString().trim() + ': ' + formattedValue);
+      }
+    }
+    
+    return {
+      date: getDateFormatted(date),
+      leaders: leaderPairs.join('\n')
+    };
+    
+  } catch (error) {
+    Logger.log('Error formatting bulletin row: ' + error.toString());
+    return { date: getDateFormatted(date), leaders: '' };
+  }
+}
+
+/**
+ * Formats the Cleaners column value
+ */
+function formatCleanersValue(cleanersContent) {
+  try {
+    if (!cleanersContent || cleanersContent.trim() === '') {
+      return '';
+    }
+    
+    const names = cleanersContent.split(',').map(name => name.trim()).filter(name => name !== '');
+    const dishwashers = [];
+    const tableCleaners = [];
+    
+    names.forEach(name => {
+      if (name.startsWith('*')) {
+        tableCleaners.push(name.substring(1).trim());
+      } else if (name.endsWith('*')) {
+        tableCleaners.push(name.substring(0, name.length - 1).trim());
+      } else {
+        dishwashers.push(name);
+      }
+    });
+    
+    let formatted = '';
+    
+    if (dishwashers.length > 0) {
+      formatted += 'Dishwashers: ' + dishwashers.join(', ');
+    }
+    
+    if (tableCleaners.length > 0) {
+      if (formatted !== '') {
+        formatted += '\n';
+      }
+      formatted += 'Table cleaners: ' + tableCleaners.join(', ');
+    }
+    
+    return formatted;
+    
+  } catch (error) {
+    return cleanersContent;
+  }
+}
+
+/**
+ * Creates the presentation with all slides
+ */
+function createPresentation(hymnsData, hymnDetails, scriptureContent, presentationName, praiseData, bulletinLeadersData) {
+  try {
+    Logger.log('Creating presentation: ' + presentationName);
     
     const presentation = SlidesApp.openById(
       DriveApp.getFileById(CONFIG.TEMPLATE_ID)
@@ -180,8 +254,6 @@ function createPresentation(hymnsData, hymnDetails, scriptureContent, presentati
     );
 
     const slides = presentation.getSlides();
-    Logger.log(`Created presentation with ${slides.length} slides`);
-    
     const templateSlides = findTemplateSlides(slides);
     
     if (!areAllTemplateSlidesFound(templateSlides)) {
@@ -189,22 +261,20 @@ function createPresentation(hymnsData, hymnDetails, scriptureContent, presentati
       return;
     }
 
-    // Update the slides in proper order
     updateTitleSlides(templateSlides, hymnDetails);
     createVersesSlides(templateSlides, hymnDetails);
     updateScriptureSlides(slides, scriptureContent);
     updateSermonSlides(slides, hymnsData.sermonTitle);
     updateParticipantsSlides(slides, hymnsData);
     
-    // Update cleaning announcements
-    updateCleaningAnnouncementSlides(slides, cleaningAnnouncements);
+    if (bulletinLeadersData) {
+      updateBulletinLeadersSlides(slides, bulletinLeadersData);
+    }
     
-    // Add praise song slides if email was found
     if (praiseData) {
       updatePraiseSongSlides(presentation, praiseData);
     }
 
-    // Clean up template slides AFTER all processing
     if (templateSlides.openingLyrics) {
       templateSlides.openingLyrics.remove();
     }
@@ -217,18 +287,15 @@ function createPresentation(hymnsData, hymnDetails, scriptureContent, presentati
     
   } catch (error) {
     Logger.log('Error in createPresentation: ' + error.toString());
-    Logger.log('Error stack: ' + error.stack);
   }
 }
 
 /**
- * Updates slides with cleaning announcement placeholders
+ * Updates slides with bulletin leaders placeholders
  */
-function updateCleaningAnnouncementSlides(slides, cleaningAnnouncements) {
+function updateBulletinLeadersSlides(slides, bulletinLeadersData) {
   try {
-    Logger.log('Updating cleaning announcements:', cleaningAnnouncements);
-    
-    slides.forEach((slide, index) => {
+    slides.forEach((slide) => {
       const shapes = slide.getShapes();
       shapes.forEach(shape => {
         try {
@@ -237,25 +304,31 @@ function updateCleaningAnnouncementSlides(slides, cleaningAnnouncements) {
           
           const text = textRange.asString();
           
-          // Replace today's announcement (with the typo as in user's template)
-          if (text.includes(PLACEHOLDERS.TODAY_ACCOUNCEMENT)) {
-            textRange.replaceAllText(PLACEHOLDERS.TODAY_ACCOUNCEMENT, cleaningAnnouncements.today);
-            Logger.log(`Replaced today's announcement on slide ${index + 1}`);
+          if (text.includes(PLACEHOLDERS.THIS_WEEK_DATE)) {
+            textRange.replaceAllText(PLACEHOLDERS.THIS_WEEK_DATE, bulletinLeadersData.thisWeek.date);
           }
-          
-          // Replace upcoming announcement (with the typo as in user's template)
-          if (text.includes(PLACEHOLDERS.UPCOMING_ACCOUNCEMENT)) {
-            textRange.replaceAllText(PLACEHOLDERS.UPCOMING_ACCOUNCEMENT, cleaningAnnouncements.upcoming);
-            Logger.log(`Replaced upcoming announcement on slide ${index + 1}`);
+          if (text.includes(PLACEHOLDERS.THIS_WEEK_LEADERS)) {
+            textRange.replaceAllText(PLACEHOLDERS.THIS_WEEK_LEADERS, bulletinLeadersData.thisWeek.leaders);
+          }
+          if (text.includes(PLACEHOLDERS.NEXT_WEEK_DATE)) {
+            textRange.replaceAllText(PLACEHOLDERS.NEXT_WEEK_DATE, bulletinLeadersData.nextWeek.date);
+          }
+          if (text.includes(PLACEHOLDERS.NEXT_WEEK_LEADERS)) {
+            textRange.replaceAllText(PLACEHOLDERS.NEXT_WEEK_LEADERS, bulletinLeadersData.nextWeek.leaders);
+          }
+          if (text.includes(PLACEHOLDERS.WEEK_AFTER_DATE)) {
+            textRange.replaceAllText(PLACEHOLDERS.WEEK_AFTER_DATE, bulletinLeadersData.weekAfter.date);
+          }
+          if (text.includes(PLACEHOLDERS.WEEK_AFTER_LEADERS)) {
+            textRange.replaceAllText(PLACEHOLDERS.WEEK_AFTER_LEADERS, bulletinLeadersData.weekAfter.leaders);
           }
         } catch (error) {
-          Logger.log(`Error processing shape in slide ${index}: ${error}`);
+          // Skip shapes that don't have text
         }
       });
     });
-    
   } catch (error) {
-    Logger.log('Error updating cleaning announcement slides: ' + error.toString());
+    Logger.log('Error updating bulletin leaders slides: ' + error.toString());
   }
 }
 
@@ -267,14 +340,11 @@ function findTargetSheet(spreadsheet) {
     const sheets = spreadsheet.getSheets();
     for (let sheet of sheets) {
       if (sheet.getName().includes("Sabbath Schedule")) {
-        Logger.log('Found target sheet: ' + sheet.getName());
         return sheet;
       }
     }
-    Logger.log('No sheet found containing "Sabbath Schedule"');
     return null;
   } catch (error) {
-    Logger.log('Error finding target sheet: ' + error.toString());
     return null;
   }
 }
@@ -304,19 +374,17 @@ function extractHymnsData(sheet, targetDate) {
   try {
     const dataRange = sheet.getDataRange().getValues();
     if (dataRange.length < 2) {
-      Logger.log('Sheet has insufficient data');
       return {};
     }
     
-    const headerRow = dataRange[1]; // Assuming headers are in row 2
+    const headerRow = dataRange[1];
     const columnIndices = getColumnIndices(headerRow);
 
     for (let i = 2; i < dataRange.length; i++) {
       const dateCell = dataRange[i][0];
-      Logger.log(`Checking row ${i}, date: ${dateCell}`);
       
       if (dateCell instanceof Date && getDateFormatted(dateCell) === targetDate) {
-        const rowData = {
+        return {
           openingHymnNumber: extractHymnNumber(dataRange[i][columnIndices.openingHymn]),
           closingHymnNumber: extractHymnNumber(dataRange[i][columnIndices.closingHymn]),
           scriptureReading: dataRange[i][columnIndices.scriptureReading] || '',
@@ -327,14 +395,9 @@ function extractHymnsData(sheet, targetDate) {
           reader: dataRange[i][columnIndices.reader] || '',
           story: dataRange[i][columnIndices.story] || ''
         };
-        
-        Logger.log('Found row data:', rowData);
-        return rowData;
       }
     }
-    Logger.log('No matching date found');
     return {};
-    
   } catch (error) {
     Logger.log('Error extracting hymns data: ' + error.toString());
     return {};
@@ -349,51 +412,26 @@ function getColumnIndices(headerRow) {
   
   headerRow.forEach((header, index) => {
     const trimmedHeader = header.toString().trim();
-    Logger.log(`Checking header: "${trimmedHeader}" at index ${index}`);
     
     switch(trimmedHeader) {
-      case 'Opening Hymn':
-        indices.openingHymn = index;
-        break;
-      case 'Closing Hymn':
-        indices.closingHymn = index;
-        break;
-      case 'Scripture Reading':
-        indices.scriptureReading = index;
-        break;
-      case 'Sermon Title':
-        indices.sermonTitle = index;
-        break;
-      case 'Speaker':
-        indices.speaker = index;
-        break;
-      case 'Special Music':
-        indices.specialMusic = index;
-        break;
-      case 'Intercessory Prayer':
-        indices.prayer = index;
-        break;
-      case 'Scripture Reader':
-        indices.reader = index;
-        break;
-      case "Children's Story":
-        indices.story = index;
-        break;
-      case 'Cleaning':
-        indices.cleaning = index;
-        break;
+      case 'Opening Hymn': indices.openingHymn = index; break;
+      case 'Closing Hymn': indices.closingHymn = index; break;
+      case 'Scripture Reading': indices.scriptureReading = index; break;
+      case 'Sermon Title': indices.sermonTitle = index; break;
+      case 'Speaker': indices.speaker = index; break;
+      case 'Special Music': indices.specialMusic = index; break;
+      case 'Intercessory Prayer': indices.prayer = index; break;
+      case 'Scripture Reader': indices.reader = index; break;
+      case "Children's Story": indices.story = index; break;
     }
   });
 
-  Logger.log('Found column indices:', indices);
   return indices;
 }
 
 function updateParticipantsSlides(slides, hymnsData) {
   try {
-    Logger.log('Updating participants with data:', hymnsData);
-    
-    slides.forEach((slide, index) => {
+    slides.forEach((slide) => {
       const shapes = slide.getShapes();
       shapes.forEach(shape => {
         try {
@@ -402,7 +440,6 @@ function updateParticipantsSlides(slides, hymnsData) {
           
           const text = textRange.asString();
           
-          // Using a map of placeholders to their values for cleaner replacement
           const replacements = {
             '{{speaker}}': hymnsData.speaker || '',
             '{{music}}': hymnsData.specialMusic || '',
@@ -411,19 +448,16 @@ function updateParticipantsSlides(slides, hymnsData) {
             '{{story}}': hymnsData.story || ''
           };
 
-          // Perform all replacements
           Object.entries(replacements).forEach(([placeholder, value]) => {
             if (text.includes(placeholder)) {
-              Logger.log(`Replacing ${placeholder} with ${value}`);
               textRange.replaceAllText(placeholder, value);
             }
           });
         } catch (error) {
-          Logger.log(`Error processing shape in slide ${index}: ${error}`);
+          // Skip
         }
       });
     });
-    
   } catch (error) {
     Logger.log('Error updating participants slides: ' + error.toString());
   }
@@ -445,8 +479,6 @@ function fetchHymnDetails(hymnsData) {
   const { openingHymnNumber, closingHymnNumber } = hymnsData;
   
   try {
-    Logger.log('Fetching hymn details for opening: ' + openingHymnNumber + ', closing: ' + closingHymnNumber);
-    
     const openingLyricsUrl = `https://sdahymnals.com/Hymnal/${openingHymnNumber}`;
     const closingLyricsUrl = `https://sdahymnals.com/Hymnal/${closingHymnNumber}`;
     
@@ -454,7 +486,6 @@ function fetchHymnDetails(hymnsData) {
     const closingResponse = UrlFetchApp.fetch(closingLyricsUrl, { muteHttpExceptions: true });
     
     if (openingResponse.getResponseCode() !== 200 || closingResponse.getResponseCode() !== 200) {
-      Logger.log('HTTP error fetching hymns');
       return null;
     }
     
@@ -464,7 +495,6 @@ function fetchHymnDetails(hymnsData) {
     if (!openingLyricsHtml || !closingLyricsHtml || 
         openingLyricsHtml.includes("404 Not Found") || 
         closingLyricsHtml.includes("404 Not Found")) {
-      Logger.log('404 error or empty content');
       return null;
     }
 
@@ -515,17 +545,9 @@ function findTemplateSlides(slides) {
           templates.closingTitle = slide;
         }
       } catch (error) {
-        // Skip shapes that don't have text
+        // Skip
       }
     });
-  });
-
-  Logger.log('Found template slides:', {
-    title: templates.title ? 'found' : 'missing',
-    openingLyrics: templates.openingLyrics ? 'found' : 'missing',
-    closingLyrics: templates.closingLyrics ? 'found' : 'missing',
-    openingTitle: templates.openingTitle ? 'found' : 'missing',
-    closingTitle: templates.closingTitle ? 'found' : 'missing'
   });
 
   return templates;
@@ -535,17 +557,11 @@ function findTemplateSlides(slides) {
  * Checks if all required template slides are found
  */
 function areAllTemplateSlidesFound(templates) {
-  const required = templates.title && 
+  return templates.title && 
          templates.openingLyrics && 
          templates.closingLyrics && 
          templates.openingTitle && 
          templates.closingTitle;
-  
-  if (!required) {
-    Logger.log('Missing required template slides');
-  }
-  
-  return required;
 }
 
 /**
@@ -555,11 +571,9 @@ function updateTitleSlides(templates, hymnDetails) {
   try {
     if (templates.openingTitle && hymnDetails.opening) {
       templates.openingTitle.replaceAllText(PLACEHOLDERS.OPENING, hymnDetails.opening.title);
-      Logger.log('Updated opening title: ' + hymnDetails.opening.title);
     }
     if (templates.closingTitle && hymnDetails.closing) {
       templates.closingTitle.replaceAllText(PLACEHOLDERS.CLOSING, hymnDetails.closing.title);
-      Logger.log('Updated closing title: ' + hymnDetails.closing.title);
     }
   } catch (error) {
     Logger.log('Error updating title slides: ' + error.toString());
@@ -571,9 +585,8 @@ function updateTitleSlides(templates, hymnDetails) {
  */
 function createVersesSlides(templates, hymnDetails) {
   try {
-    const createSlidesForHymn = (verses, refrain, templateSlide, hymnType) => {
+    const createSlidesForHymn = (verses, refrain, templateSlide) => {
       if (!verses || !Array.isArray(verses) || !templateSlide) {
-        Logger.log(`Invalid data for ${hymnType} hymn verses`);
         return;
       }
       
@@ -590,7 +603,6 @@ function createVersesSlides(templates, hymnDetails) {
         }
       });
 
-      // Remove numeric-only last slide if present
       if (slidesToCreate.length > 0) {
         const lastSlideText = slidesToCreate[slidesToCreate.length - 1].text;
         if (/^\d+$/.test(lastSlideText.trim())) {
@@ -598,9 +610,7 @@ function createVersesSlides(templates, hymnDetails) {
         }
       }
 
-      Logger.log(`Creating ${slidesToCreate.length} slides for ${hymnType} hymn`);
-
-      slidesToCreate.reverse().forEach((slideData, index) => {
+      slidesToCreate.reverse().forEach((slideData) => {
         try {
           const newSlide = templateSlide.duplicate();
           const textShape = findMainTextShape(newSlide);
@@ -608,18 +618,17 @@ function createVersesSlides(templates, hymnDetails) {
             adjustFontSizeToFitShape(textShape, slideData.text);
           }
         } catch (error) {
-          Logger.log(`Error creating slide ${index} for ${hymnType}: ${error}`);
+          // Skip
         }
       });
     };
 
     if (hymnDetails.opening) {
-      createSlidesForHymn(hymnDetails.opening.verses, hymnDetails.opening.refrain, templates.openingLyrics, 'opening');
+      createSlidesForHymn(hymnDetails.opening.verses, hymnDetails.opening.refrain, templates.openingLyrics);
     }
     if (hymnDetails.closing) {
-      createSlidesForHymn(hymnDetails.closing.verses, hymnDetails.closing.refrain, templates.closingLyrics, 'closing');
+      createSlidesForHymn(hymnDetails.closing.verses, hymnDetails.closing.refrain, templates.closingLyrics);
     }
-    
   } catch (error) {
     Logger.log('Error creating verses slides: ' + error.toString());
   }
@@ -638,12 +647,11 @@ function findMainTextShape(slide) {
           return shape;
         }
       } catch (error) {
-        // Continue to next shape
+        // Continue
       }
     }
     return shapes.length > 0 ? shapes[0] : null;
   } catch (error) {
-    Logger.log('Error finding main text shape: ' + error.toString());
     return null;
   }
 }
@@ -656,10 +664,7 @@ function adjustFontSizeToFitShape(shape, text) {
     const textRange = shape.getText();
     if (!textRange) return;
     
-    // Clean up the text before setting it
-    const cleanedText = text.replace(/\n\s*\n/g, '\n') // Remove double line breaks
-                           .replace(/^\s+|\s+$/g, '') // Trim whitespace
-                           .trim();
+    const cleanedText = text.replace(/\n\s*\n/g, '\n').replace(/^\s+|\s+$/g, '').trim();
     
     textRange.setText(cleanedText);
     
@@ -671,10 +676,8 @@ function adjustFontSizeToFitShape(shape, text) {
     }
     
     textRange.getTextStyle().setFontSize(fontSize);
-    Logger.log(`Set font size to ${fontSize} for text: ${cleanedText.substring(0, 50)}...`);
-    
   } catch (error) {
-    Logger.log('Error adjusting font size: ' + error.toString());
+    // Skip
   }
 }
 
@@ -693,12 +696,9 @@ function fetchScriptureContent(scriptureReading) {
   if (!scriptureReading) return { passage: '', verse: '' };
 
   try {
-    Logger.log('Fetching scripture for: ' + scriptureReading);
-    
     const verses = scriptureReading.split(',').map(v => v.trim());
     const responses = [];
     
-    // Fetch one at a time to avoid rate limits
     for (let verse of verses) {
       const url = `https://www.biblegateway.com/passage/?search=${encodeURIComponent(verse)}&version=NIV`;
       try {
@@ -706,17 +706,14 @@ function fetchScriptureContent(scriptureReading) {
         if (response.getResponseCode() === 200) {
           responses.push(response);
         }
-        Utilities.sleep(1000); // Wait 1 second between requests
+        Utilities.sleep(1000);
       } catch (error) {
-        Logger.log('Error fetching verse ' + verse + ': ' + error.toString());
+        // Skip
       }
     }
     
     const passages = responses
-      .map(response => {
-        const htmlContent = response.getContentText();
-        return extractScriptureText(htmlContent);
-      })
+      .map(response => extractScriptureText(response.getContentText()))
       .filter(text => text && text.trim() !== '');
 
     return {
@@ -724,7 +721,6 @@ function fetchScriptureContent(scriptureReading) {
       verse: verses.join(', ')
     };
   } catch (error) {
-    Logger.log('Error fetching scripture: ' + error.toString());
     return { passage: '', verse: '' };
   }
 }
@@ -734,18 +730,15 @@ function fetchScriptureContent(scriptureReading) {
  */
 function extractScriptureText(htmlContent) {
   try {
-    // Find the std-text class element and extract content
     const stdTextRegex = /<[^>]*class\s*=\s*["']?[^"']*std-text[^"']*["']?[^>]*>([\s\S]*)/i;
     const stdTextMatch = htmlContent.match(stdTextRegex);
     
     if (!stdTextMatch || !stdTextMatch[1]) {
-      Logger.log('Could not find std-text class content');
       return '';
     }
     
     let textContent = stdTextMatch[1];
     
-    // Find the closing tag by counting div tags
     let divCount = 1;
     let endIndex = 0;
     
@@ -768,7 +761,6 @@ function extractScriptureText(htmlContent) {
     
     textContent = endIndex > 0 ? textContent.substring(0, endIndex) : textContent;
     
-    // Extract and preserve verse numbers
     const verseNumbers = [];
     textContent = textContent.replace(/<[^>]*class\s*=\s*["']?[^"']*versenum[^"']*["']?[^>]*>([\s\S]*?)<\/[^>]+>/gi, (match, verseNum) => {
       const cleanVerseNum = verseNum.replace(/<[^>]+>/g, '').trim();
@@ -776,13 +768,11 @@ function extractScriptureText(htmlContent) {
       return `{{VERSE_${verseNumbers.length - 1}}}`;
     });
     
-    // Remove other HTML elements
     textContent = textContent.replace(/<sup[^>]*>[\s\S]*?<\/sup>/gi, '');
     textContent = textContent.replace(/<[^>]+>/g, ' ');
     textContent = textContent.replace(/\(\s*[A-Z]\s*\)/g, '');
     textContent = textContent.replace(/\s+/g, ' ').trim();
     
-    // Clean up HTML entities
     textContent = textContent.replace(/&nbsp;/g, ' ')
                              .replace(/&amp;/g, '&')
                              .replace(/&lt;/g, '<')
@@ -791,15 +781,12 @@ function extractScriptureText(htmlContent) {
                              .replace(/&#39;/g, "'")
                              .replace(/&#\d+;/g, '');
     
-    // Restore verse numbers
     verseNumbers.forEach((verseNum, index) => {
       textContent = textContent.replace(`{{VERSE_${index}}}`, verseNum + ' ');
     });
     
     return textContent;
-    
   } catch (error) {
-    Logger.log('Error extracting scripture text: ' + error.toString());
     return '';
   }
 }
@@ -809,7 +796,7 @@ function extractScriptureText(htmlContent) {
  */
 function updateScriptureSlides(slides, scriptureContent) {
   try {
-    slides.forEach((slide, index) => {
+    slides.forEach((slide) => {
       const shapes = slide.getShapes();
       shapes.forEach(shape => {
         try {
@@ -820,14 +807,12 @@ function updateScriptureSlides(slides, scriptureContent) {
           if (text.includes(PLACEHOLDERS.PASSAGE)) {
             textRange.replaceAllText(PLACEHOLDERS.PASSAGE, scriptureContent.passage);
             adjustFontSizeToFitShape(shape, scriptureContent.passage);
-            Logger.log('Updated scripture passage on slide ' + (index + 1));
           }
           if (text.includes(PLACEHOLDERS.VERSE)) {
             textRange.replaceAllText(PLACEHOLDERS.VERSE, scriptureContent.verse);
-            Logger.log('Updated scripture verse reference on slide ' + (index + 1));
           }
         } catch (error) {
-          // Skip shapes that don't have text
+          // Skip
         }
       });
     });
@@ -841,7 +826,7 @@ function updateScriptureSlides(slides, scriptureContent) {
  */
 function updateSermonSlides(slides, sermonTitle) {
   try {
-    slides.forEach((slide, index) => {
+    slides.forEach((slide) => {
       const shapes = slide.getShapes();
       shapes.forEach(shape => {
         try {
@@ -851,10 +836,9 @@ function updateSermonSlides(slides, sermonTitle) {
           const text = textRange.asString();
           if (text.includes(PLACEHOLDERS.SERMON)) {
             textRange.replaceAllText(PLACEHOLDERS.SERMON, sermonTitle || '');
-            Logger.log('Updated sermon title on slide ' + (index + 1) + ': ' + sermonTitle);
           }
         } catch (error) {
-          // Skip shapes that don't have text
+          // Skip
         }
       });
     });
@@ -871,7 +855,6 @@ function extractHymnTitle(html) {
     const titleMatch = html.match(/<h1[^>]*class\s*=\s*["']?title\s+single-title\s+entry-title["']?[^>]*>(.*?)<\/h1>/);
     return titleMatch ? decodeHtmlEntities(titleMatch[1].trim()) : "Untitled Hymn";
   } catch (error) {
-    Logger.log('Error extracting hymn title: ' + error.toString());
     return "Untitled Hymn";
   }
 }
@@ -884,18 +867,9 @@ function decodeHtmlEntities(text) {
     text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
                .replace(/&#x([a-fA-F0-9]+);/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
 
-    const entities = {
-      amp: '&',
-      lt: '<',
-      gt: '>',
-      quot: '"',
-      apos: "'",
-      nbsp: ' '
-    };
-
+    const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
     return text.replace(/&([a-zA-Z]+);/g, (match, entity) => entities[entity] || match);
   } catch (error) {
-    Logger.log('Error decoding HTML entities: ' + error.toString());
     return text;
   }
 }
@@ -915,7 +889,6 @@ function extractHymnVerses(html) {
     const pTags = contentBoxHtml.match(/<p>([\s\S]*?)<\/p>/g) || [];
     
     pTags.forEach(pTag => {
-      // First replace <br> tags with a special marker
       let verseHtml = pTag.replace(/<a[^>]*>.*?<\/a>/g, '')
                          .replace(/<br\s*\/?>/gi, '||LINEBREAK||')
                          .replace(/<\/?[^>]+(>|$)/g, "")
@@ -924,11 +897,10 @@ function extractHymnVerses(html) {
       const decodedVerse = decodeHtmlEntities(verseHtml);
       
       if (decodedVerse && decodedVerse.trim()) {
-        // Replace the markers with actual line breaks and clean up extra whitespace
         const cleanedVerse = decodedVerse.replace(/\|\|LINEBREAK\|\|/g, '\n')
-                                        .replace(/\n\s*\n/g, '\n') // Remove double line breaks
-                                        .replace(/^\s+|\s+$/g, '') // Trim start/end
-                                        .replace(/[ \t]+/g, ' '); // Normalize spaces
+                                        .replace(/\n\s*\n/g, '\n')
+                                        .replace(/^\s+|\s+$/g, '')
+                                        .replace(/[ \t]+/g, ' ');
         
         if (cleanedVerse.toLowerCase().includes("refrain")) {
           refrain = cleanedVerse;
@@ -940,54 +912,39 @@ function extractHymnVerses(html) {
 
     return { verses, refrain };
   } catch (error) {
-    Logger.log('Error extracting hymn verses: ' + error.toString());
     return { verses: [], refrain: "" };
   }
 }
 
 /**
- * Modified searchGmailForPraiseLyrics to return data instead of updating slides directly
+ * Searches Gmail for praise/worship lyrics
  */
 function searchGmailForPraiseLyrics() {
   try {
-    // Calculate date 6 days ago
     const tenDaysAgo = new Date();
     tenDaysAgo.setDate(tenDaysAgo.getDate() - 5);
     const dateString = Utilities.formatDate(tenDaysAgo, Session.getScriptTimeZone(), 'yyyy/MM/dd');
     
-    // Search for emails with (praise AND lyrics) OR (worship AND lyrics) in subject within past 6 days
     const searchQuery = `after:${dateString} (subject:(praise lyrics) OR subject:(worship lyrics))`;
-    
     const threads = GmailApp.search(searchQuery, 0, 5);
     
     if (threads.length === 0) {
-      Logger.log('No praise/worship email threads found');
       return null;
     }
     
-    // Get the most recent email (first in results)
     const mostRecentThread = threads[0];
     const message = mostRecentThread.getMessages()[0];
     
-    // Get the HTML body
     let emailBody = message.getBody();
     
-    // If HTML is empty, try plain text
     if (!emailBody || emailBody.trim() === '') {
       emailBody = message.getPlainBody();
       
-      // For plain text, split by double newlines
       const lines = emailBody.split('\n').map(line => line.trim()).filter(line => line !== '');
       
-      if (lines.length < 2) {
-        Logger.log('Not enough content in plain text email');
-        return null;
-      }
+      if (lines.length < 2) return null;
       
-      // First line is title
       const songTitle = lines[0];
-      
-      // Group remaining lines into paragraphs based on empty lines
       const lyrics = [];
       let currentParagraph = [];
       
@@ -1006,18 +963,9 @@ function searchGmailForPraiseLyrics() {
         lyrics.push(currentParagraph.join('\n'));
       }
       
-      return {
-        title: songTitle,
-        lyrics: lyrics,
-        subject: message.getSubject(),
-        date: message.getDate()
-      };
+      return { title: songTitle, lyrics: lyrics, subject: message.getSubject(), date: message.getDate() };
     }
     
-    // Process HTML email
-    Logger.log('Processing HTML email');
-    
-    // Extract all div contents in order
     const divPattern = /<div[^>]*>(.*?)<\/div>/gi;
     const divContents = [];
     let match;
@@ -1025,36 +973,21 @@ function searchGmailForPraiseLyrics() {
     while ((match = divPattern.exec(emailBody)) !== null) {
       let content = match[1];
       
-      // Check if this is just a <br> (paragraph separator)
       if (content.match(/^\s*<br\s*\/?>\s*$/)) {
         divContents.push('||BREAK||');
       } else {
-        // Clean the content
-        content = content.replace(/<br\s*\/?>/gi, ' ')
-                        .replace(/<[^>]*>/g, '')
-                        .trim();
+        content = content.replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]*>/g, '').trim();
         
         if (content !== '') {
-          // Decode HTML entities and quoted-printable
-          content = content.replace(/&nbsp;/g, ' ')
-                          .replace(/&amp;/g, '&')
-                          .replace(/&lt;/g, '<')
-                          .replace(/&gt;/g, '>')
-                          .replace(/&quot;/g, '"')
-                          .replace(/&#39;/g, "'")
-                          .replace(/&#\d+;/g, '')
-                          .replace(/=E2=80=99/g, "'")
-                          .replace(/=\r?\n/g, '')
-                          .replace(/=[0-9A-F]{2}/gi, '');
-          
+          content = content.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+                          .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+                          .replace(/&#\d+;/g, '').replace(/=E2=80=99/g, "'")
+                          .replace(/=\r?\n/g, '').replace(/=[0-9A-F]{2}/gi, '');
           divContents.push(content);
         }
       }
     }
     
-    Logger.log('Found ' + divContents.length + ' div elements');
-    
-    // Now group the content based on ||BREAK|| markers
     const sections = [];
     let currentSection = [];
     
@@ -1069,209 +1002,118 @@ function searchGmailForPraiseLyrics() {
       }
     }
     
-    // Don't forget the last section
     if (currentSection.length > 0) {
       sections.push(currentSection.join('\n'));
     }
     
-    Logger.log('Grouped into ' + sections.length + ' sections');
-    
-    // If we have sections, first is title, rest are lyrics
     if (sections.length >= 2) {
-      const songTitle = sections[0];
-      const lyrics = sections.slice(1);
-      
-      Logger.log('Title: ' + songTitle);
-      Logger.log('Number of lyric sections: ' + lyrics.length);
-      
-      return {
-        title: songTitle,
-        lyrics: lyrics,
-        subject: message.getSubject(),
-        date: message.getDate()
-      };
+      return { title: sections[0], lyrics: sections.slice(1), subject: message.getSubject(), date: message.getDate() };
     }
     
-    // Fallback: If we don't have clear sections but have divContents
-    // First non-break item is title, group rest by breaks
     if (divContents.length > 0) {
-      // Filter out breaks and get real content
       const contentOnly = divContents.filter(item => item !== '||BREAK||');
-      
-      if (contentOnly.length < 2) {
-        Logger.log('Not enough content found');
-        return null;
-      }
+      if (contentOnly.length < 2) return null;
       
       const songTitle = contentOnly[0];
-      
-      // Group remaining content - look for natural paragraph breaks
-      // Based on your screenshot: 2 lines, 4 lines, 4 lines, 4 lines
       const remainingLines = contentOnly.slice(1);
       const lyrics = [];
       
-      // Your song structure appears to be:
-      // First verse: 2 lines
-      // Chorus: 4 lines  
-      // Second verse: 4 lines
-      // Chorus repeat: 4 lines
-      
       if (remainingLines.length >= 14) {
-        // We have enough lines for the full structure
-        lyrics.push(remainingLines.slice(0, 2).join('\n'));  // First verse (2 lines)
-        lyrics.push(remainingLines.slice(2, 6).join('\n'));  // First chorus (4 lines)
-        lyrics.push(remainingLines.slice(6, 10).join('\n')); // Second verse (4 lines)
-        lyrics.push(remainingLines.slice(10, 14).join('\n')); // Second chorus (4 lines)
+        lyrics.push(remainingLines.slice(0, 2).join('\n'));
+        lyrics.push(remainingLines.slice(2, 6).join('\n'));
+        lyrics.push(remainingLines.slice(6, 10).join('\n'));
+        lyrics.push(remainingLines.slice(10, 14).join('\n'));
       } else {
-        // Try to intelligently group based on content
         let currentVerse = [];
-        
         for (let i = 0; i < remainingLines.length; i++) {
           const line = remainingLines[i];
           currentVerse.push(line);
-          
-          // Check if this line suggests end of a verse/chorus
-          // Look for lines ending with "silver", "gold", "will", "within", "sin"
-          if (line.match(/(silver|gold|will|within|sin)$/i) || 
-              (currentVerse.length === 4) || 
-              (currentVerse.length === 2 && i < 4)) {
+          if (line.match(/(silver|gold|will|within|sin)$/i) || (currentVerse.length === 4) || (currentVerse.length === 2 && i < 4)) {
             lyrics.push(currentVerse.join('\n'));
             currentVerse = [];
           }
         }
-        
-        // Add any remaining lines
         if (currentVerse.length > 0) {
           lyrics.push(currentVerse.join('\n'));
         }
       }
       
-      Logger.log('Parsed title: ' + songTitle);
-      Logger.log('Created ' + lyrics.length + ' lyric sections');
-      
-      return {
-        title: songTitle,
-        lyrics: lyrics,
-        subject: message.getSubject(),
-        date: message.getDate()
-      };
+      return { title: songTitle, lyrics: lyrics, subject: message.getSubject(), date: message.getDate() };
     }
     
-    Logger.log('Could not parse email properly');
     return null;
-    
   } catch (error) {
-    Logger.log('Error searching Gmail for praise lyrics: ' + error.toString());
+    Logger.log('Error searching Gmail: ' + error.toString());
     return null;
   }
 }
 
 /**
- * Updated function to add praise song slides to existing presentation
+ * Updates praise song slides in presentation
  */
 function updatePraiseSongSlides(presentation, praiseData) {
-  if (!praiseData) {
-    Logger.log('No praise data to process');
-    return;
-  }
+  if (!praiseData) return;
   
   try {
-    Logger.log('Starting updatePraiseSongSlides with data:');
-    Logger.log('Title: ' + praiseData.title);
-    Logger.log('Number of lyric sections: ' + praiseData.lyrics.length);
-    
     const slides = presentation.getSlides();
     
-    // First, replace {{praise_song}} with the title in all slides
-    let praiseSongFound = false;
-    slides.forEach((slide, index) => {
+    slides.forEach((slide) => {
       const shapes = slide.getShapes();
       shapes.forEach(shape => {
         try {
           const textRange = shape.getText();
           if (!textRange) return;
-          
           const text = textRange.asString();
           if (text.includes(PLACEHOLDERS.PRAISE_SONG)) {
             textRange.replaceAllText(PLACEHOLDERS.PRAISE_SONG, praiseData.title);
-            praiseSongFound = true;
-            Logger.log('Replaced {{praise_song}} with title on slide ' + (index + 1));
           }
         } catch (error) {
-          // Skip shapes that don't have text
+          // Skip
         }
       });
     });
     
-    if (!praiseSongFound) {
-      Logger.log('Warning: {{praise_song}} placeholder not found');
-    }
-    
-    // Find the template slide containing {{praise_lyrics}}
     let templateSlide = null;
-    let templateSlideIndex = -1;
     
     for (let i = 0; i < slides.length; i++) {
       const slide = slides[i];
       const shapes = slide.getShapes();
-      
       for (let shape of shapes) {
         try {
           const text = shape.getText().asString();
           if (text.includes(PLACEHOLDERS.PRAISE_LYRICS)) {
             templateSlide = slide;
-            templateSlideIndex = i;
-            Logger.log('Found {{praise_lyrics}} placeholder on slide ' + (i + 1));
             break;
           }
         } catch (error) {
-          // Skip shapes that don't have text
+          // Skip
         }
       }
-      
       if (templateSlide) break;
     }
     
     if (!templateSlide) {
-      Logger.log('Warning: {{praise_lyrics}} placeholder not found in any slide');
-      
-      // Alternative: If we can't find {{praise_lyrics}}, check if {{praise_song}} was replaced
-      // and use that slide to add the lyrics
       for (let i = 0; i < slides.length; i++) {
         const slide = slides[i];
         const shapes = slide.getShapes();
-        
         for (let shape of shapes) {
           try {
             const text = shape.getText().asString();
-            // Check if this slide contains the praise song title we just added
             if (text.includes(praiseData.title)) {
-              // This might be our target slide
-              // Replace the entire content with first verse, then duplicate for others
               templateSlide = slide;
-              templateSlideIndex = i;
-              Logger.log('Using slide with praise song title as template (slide ' + (i + 1) + ')');
-              
-              // Replace the title with the first verse
               const firstVerse = praiseData.lyrics[0];
               if (firstVerse) {
                 shape.getText().setText(firstVerse);
                 adjustFontSizeToFitShape(shape, firstVerse);
-                Logger.log('Replaced title with first verse');
-                
-                // Now create additional slides for remaining verses
                 for (let j = 1; j < praiseData.lyrics.length; j++) {
                   const newSlide = slide.duplicate();
                   const newShapes = newSlide.getShapes();
-                  
-                  // Find the text shape in the new slide
                   for (let newShape of newShapes) {
                     try {
                       const textRange = newShape.getText();
                       if (textRange && textRange.asString().includes(firstVerse)) {
                         textRange.setText(praiseData.lyrics[j]);
                         adjustFontSizeToFitShape(newShape, praiseData.lyrics[j]);
-                        Logger.log('Created slide ' + (j + 1) + ' for verse: ' + praiseData.lyrics[j].substring(0, 30) + '...');
                         break;
                       }
                     } catch (error) {
@@ -1279,142 +1121,55 @@ function updatePraiseSongSlides(presentation, praiseData) {
                     }
                   }
                 }
-                
-                return; // We're done
+                return;
               }
               break;
             }
           } catch (error) {
-            // Skip shapes that don't have text
+            // Skip
           }
         }
-        
         if (templateSlide) break;
       }
-      
-      if (!templateSlide) {
-        Logger.log('Could not find any slide to use for praise lyrics');
-        return;
-      }
+      if (!templateSlide) return;
     }
     
-    // Filter out any empty paragraphs before processing
     const validParagraphs = praiseData.lyrics.filter(para => para && para.trim() !== '');
+    if (validParagraphs.length === 0) return;
     
-    Logger.log('Valid paragraphs to create: ' + validParagraphs.length);
-    
-    if (validParagraphs.length === 0) {
-      Logger.log('No valid paragraphs to process');
-      return;
-    }
-    
-    // Log each paragraph for debugging
-    validParagraphs.forEach((para, index) => {
-      Logger.log('Paragraph ' + (index + 1) + ': ' + para.substring(0, 50) + '...');
-    });
-    
-    // Create slides for each paragraph
-    // First, update the template slide with the first paragraph
     const shapes = templateSlide.getShapes();
-    let lyricsShapeFound = false;
-    
     shapes.forEach(shape => {
       try {
         const textRange = shape.getText();
         if (!textRange) return;
-        
         const text = textRange.asString();
         if (text.includes(PLACEHOLDERS.PRAISE_LYRICS)) {
           textRange.replaceAllText(PLACEHOLDERS.PRAISE_LYRICS, validParagraphs[0].trim());
           adjustFontSizeToFitShape(shape, validParagraphs[0].trim());
-          lyricsShapeFound = true;
-          Logger.log('Replaced {{praise_lyrics}} with first paragraph');
         }
       } catch (error) {
-        // Skip shapes that don't have text
+        // Skip
       }
     });
     
-    if (!lyricsShapeFound) {
-      Logger.log('Warning: Could not find {{praise_lyrics}} in the template slide shapes');
-    }
-    
-    // Create duplicates for remaining paragraphs
     for (let i = 1; i < validParagraphs.length; i++) {
       const newSlide = templateSlide.duplicate();
       const newShapes = newSlide.getShapes();
-      
-      // Update the text in the duplicated slide
       newShapes.forEach(shape => {
         try {
           const textRange = shape.getText();
           if (!textRange) return;
-          
           const text = textRange.asString();
-          // The duplicated slide will have the first paragraph, replace it with the current paragraph
           if (text.includes(validParagraphs[0].trim())) {
             textRange.setText(validParagraphs[i].trim());
             adjustFontSizeToFitShape(shape, validParagraphs[i].trim());
-            Logger.log('Created slide for paragraph ' + (i + 1));
           }
         } catch (error) {
-          // Skip shapes that don't have text
+          // Skip
         }
       });
     }
-    
-    Logger.log('Praise song slides creation completed');
-    
   } catch (error) {
     Logger.log('Error in updatePraiseSongSlides: ' + error.toString());
-  }
-}
-
-/**
- * Test function to verify the script works
- */
-function testScript() {
-  try {
-    Logger.log('Testing script functionality...');
-    
-    // Test upcoming Saturday calculation
-    const upcomingSaturday = getUpcomingSaturday();
-    Logger.log('Upcoming Saturday: ' + getDateFormatted(upcomingSaturday));
-    
-    // Test spreadsheet connection
-    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-    if (spreadsheet) {
-      Logger.log('Successfully connected to spreadsheet');
-      const targetSheet = findTargetSheet(spreadsheet);
-      if (targetSheet) {
-        Logger.log('Found target sheet: ' + targetSheet.getName());
-        
-        // Test cleaning announcements
-        const cleaningAnnouncements = getCleaningAnnouncements(targetSheet, upcomingSaturday);
-        Logger.log('Today\'s cleaning announcement: ' + cleaningAnnouncements.today);
-        Logger.log('Upcoming cleaning announcement: ' + cleaningAnnouncements.upcoming);
-      } else {
-        Logger.log('Could not find target sheet');
-      }
-    } else {
-      Logger.log('Could not connect to spreadsheet');
-    }
-    
-    // Test Gmail search (if permission granted)
-    try {
-      const praiseData = searchGmailForPraiseLyrics();
-      if (praiseData) {
-        Logger.log('Found praise song: ' + praiseData.title);
-      } else {
-        Logger.log('No praise songs found in Gmail');
-      }
-    } catch (error) {
-      Logger.log('Gmail access not available or error: ' + error.toString());
-    }
-    
-    Logger.log('Test completed');
-    
-  } catch (error) {
-    Logger.log('Test error: ' + error.toString());
   }
 }
